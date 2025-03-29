@@ -7,17 +7,21 @@ from datetime import datetime
 class AperturaData:
     """
     Maneja la información contable y las operaciones:
-      - Asiento de Apertura
-      - Compra en Efectivo
-      - Compra a Crédito
-      - Compra Combinada
-      - Pago de Rentas Pagadas por Anticipado
-      - Compra de Papelería
-      - Anticipo de Clientes
-      - Venta (pago completo del cliente)
+      1. Asiento de Apertura
+      2. Compras (Efectivo, Crédito, Combinada)
+      3. Pago de Rentas Pagadas por Anticipado
+      4. Compra de Papelería
+      5. Anticipo de Clientes
+      6. Venta
+      7. Costo de lo Vendido
+      8. Gastos Generales
+      9. Anulación de Anticipo de Clientes
+      10. Depreciaciones
+
       + Libro Diario (registro automático de cada asiento)
-      + Tablas de Mayor (un 'T-account' para cada cuenta).
-      + Balance de Comprobación (nuevo).
+      + Tablas de Mayor (T-accounts)
+      + Balanza de Comprobación
+      + Balance General
     """
     def __init__(self):
         # Nombre de la empresa
@@ -27,7 +31,7 @@ class AperturaData:
         # Tasa de IVA
         self.iva_rate = 0.16
         
-        # Cuentas de Activo (fijas, Activo Circulante)
+        # Cuentas de Activo (circulante)
         self.caja = 0.0
         self.inventario = 0.0
         self.rentas_anticipadas = 0.0
@@ -42,7 +46,7 @@ class AperturaData:
         # Pasivo
         self.acreedores = 0.0
         self.documentos_por_pagar = 0.0
-        self.anticipo_clientes = []
+        self.anticipo_clientes = []  # Lista de (descripcion, monto)
         
         # Totales y Capital
         self.total_circulante = 0.0
@@ -175,7 +179,7 @@ class AperturaData:
         self.recalcular_totales()
 
     # ----------------------------------------------------------------
-    # OPERACIONES
+    # OPERACIONES (1a PARTE)
     # ----------------------------------------------------------------
     def compra_en_efectivo(self, nombre: str, valor: float):
         if not self.apertura_realizada:
@@ -240,8 +244,6 @@ class AperturaData:
         ]
         self.registrar_en_libro_diario(f"Compra Combinada - {nombre}", lineas, "3")
 
-    
-        
     def pago_rentas_op(self, nombre: str, valor: float):
         if not self.apertura_realizada:
             raise ValueError("Debe realizar primero el Asiento de Apertura.")
@@ -252,7 +254,7 @@ class AperturaData:
         self.caja -= (valor + iva_renta)
         self.recalcular_totales()
         
-        # Libro Diario (Código 6)
+        # Libro Diario (Código 4)
         lineas = [
             ("Rentas Pagadas Anticipado", valor, 0.0),
             ("IVA Acreditable", iva_renta, 0.0),
@@ -279,17 +281,21 @@ class AperturaData:
         self.registrar_en_libro_diario(f"Compra Papelería - {nombre}", lineas, "5")
         
     def anticipo_clientes_op(self, nombre: str, venta: float):
+        """
+        Registra un anticipo de un cliente por la mitad del valor 'venta'.
+        """
         if not self.apertura_realizada:
             raise ValueError("Debe realizar primero el Asiento de Apertura.")
         
         half_sale = venta / 2.0
         half_iva = half_sale * self.iva_rate
         self.caja += (half_sale + half_iva)
+        # Guardamos dos renglones en la lista anticipo_clientes, uno para el anticipo y otro para el IVA
         self.anticipo_clientes.append((f"Anticipo de Clientes - {nombre}", half_sale))
         self.anticipo_clientes.append((f"IVA Trasladado - {nombre}", half_iva))
         self.recalcular_totales()
         
-        # Libro Diario (Código 4)
+        # Libro Diario (Código 6)
         lineas = [
             ("Caja", half_sale + half_iva, 0.0),
             (f"Anticipo de Clientes - {nombre}", 0.0, half_sale),
@@ -297,7 +303,116 @@ class AperturaData:
         ]
         self.registrar_en_libro_diario(f"Anticipo de Clientes - {nombre}", lineas, "6")
 
+    # ----------------------------------------------------------------
+    # OPERACIONES (2a PARTE) 
+    #   - Venta
+    #   - Costo de lo Vendido
+    #   - Gastos Generales
+    #   - Anular Anticipo de Cliente
+    #   - Depreciaciones
+    # ----------------------------------------------------------------
+    def registrar_venta(self, descripcion: str, monto: float):
+        """
+        Registra una venta (cobro completo en efectivo, por ejemplo).
+        Se incrementa la caja y se reconoce 'Ventas' y 'IVA Trasladado'.
+        """
+        if not self.apertura_realizada:
+            raise ValueError("Debe realizar primero el Asiento de Apertura.")
+        
+        iva_venta = monto * self.iva_rate
+        self.caja += (monto + iva_venta)
+        self.recalcular_totales()
+        
+        lineas = [
+            ("Caja", monto + iva_venta, 0.0),
+            ("Ventas", 0.0, monto),
+            ("IVA Trasladado", 0.0, iva_venta)
+        ]
+        self.registrar_en_libro_diario(f"Venta - {descripcion}", lineas, "V")
 
+    def registrar_costo_vendido(self, descripcion: str, costo: float):
+        """
+        Descarga el inventario y reconoce el Costo de lo Vendido.
+        """
+        if not self.apertura_realizada:
+            raise ValueError("Debe realizar primero el Asiento de Apertura.")
+        if costo > self.inventario:
+            raise ValueError("No hay suficiente inventario para ese costo.")
+        
+        self.inventario -= costo
+        self.recalcular_totales()
+        
+        lineas = [
+            ("Costo de lo Vendido", costo, 0.0),
+            ("Inventario", 0.0, costo)
+        ]
+        self.registrar_en_libro_diario(f"Costo de lo Vendido - {descripcion}", lineas, "CV")
+
+    def registrar_gastos_generales(self, descripcion: str, monto: float):
+        """
+        Registra gastos generales (por ejemplo, pago de renta, servicios, etc.)
+        sin anticipo. Se descuenta de caja.
+        """
+        if not self.apertura_realizada:
+            raise ValueError("Debe realizar primero el Asiento de Apertura.")
+        
+        # Si hay IVA en el gasto, puedes dividir. Aquí lo hacemos sin IVA para simplificar.
+        self.caja -= monto
+        self.recalcular_totales()
+        
+        lineas = [
+            ("Gastos Generales", monto, 0.0),
+            ("Caja", 0.0, monto)
+        ]
+        self.registrar_en_libro_diario(f"Gastos Generales - {descripcion}", lineas, "G")
+
+    def anular_anticipo_cliente(self, descripcion: str, monto: float):
+        """
+        Cuando recibes la otra parte de la venta (o quieres 'liberar' ese anticipo),
+        lo conviertes en 'Ventas' y quitas el 'Anticipo de Clientes'.
+        """
+        if not self.apertura_realizada:
+            raise ValueError("Debe realizar primero el Asiento de Apertura.")
+        
+        # Suponiendo que el anticipo fue la mitad, ahora registramos la otra mitad
+        iva_venta = monto * self.iva_rate
+        self.caja += (monto + iva_venta)
+        self.recalcular_totales()
+
+        # Debitar Anticipo, acreditar Ventas e IVA Trasladado
+        lineas = [
+            ("Caja", monto + iva_venta, 0.0),
+            ("Anticipo de Clientes", monto, 0.0),     # Quitamos el anticipo
+            ("IVA Trasladado", 0.0, iva_venta),
+            ("Ventas", 0.0, monto)
+        ]
+        self.registrar_en_libro_diario(f"Anular anticipo - {descripcion}", lineas, "AA")
+    
+    def registrar_depreciacion(self, descripcion: str, dict_depreciaciones: dict):
+        """
+        dict_depreciaciones: un diccionario con las cuentas de Dep. Acum. y sus montos.
+        Por ejemplo:
+        {
+          "Dep. Acum. De Departamento": 1000.0,
+          "Dep. Acum. De Eq. Y Tecnologia": 2000.0,
+          ...
+        }
+        Se registra la depreciación como un gasto (p.e. 'Gastos Generales' o 'Depreciación')
+        y se abona a las cuentas de Dep. Acumulada correspondientes.
+        """
+        if not self.apertura_realizada:
+            raise ValueError("Debe realizar primero el Asiento de Apertura.")
+
+        total_dep = sum(dict_depreciaciones.values())
+        # Cargo a Gastos Generales (o podrías usar otra cuenta "Gasto x Depreciación")
+        lineas = [("Gastos Generales", total_dep, 0.0)]
+        
+        # Abono a cada Dep. Acumulada
+        for cuenta_dep, valor in dict_depreciaciones.items():
+            lineas.append((cuenta_dep, 0.0, valor))
+        
+        self.registrar_en_libro_diario(f"Depreciaciones - {descripcion}", lineas, "DEP")
+        self.recalcular_totales()
 
     # --------------------------------------
     # MÉTODO PARA GENERAR EL BALANCE
@@ -386,9 +501,9 @@ class AperturaData:
         return texto
 
     # =======================
-    # BALANCE DE COMPROBACIÓN
+    # BALANZA DE COMPROBACIÓN
     # =======================
-    def generar_balance_comprobacion(self) -> str:
+    def generar_balanza_comprobacion(self) -> str:
         """
         Genera la Balanza de Comprobación con cuatro columnas:
         - Debe total
@@ -401,7 +516,7 @@ class AperturaData:
             return "No hay movimientos en las cuentas del Mayor. (Realiza primero el Asiento de Apertura)"
 
         lines = []
-        lines.append("BALANCE DE COMPROBACIÓN".center(60))
+        lines.append("BALANZA DE COMPROBACIÓN".center(60))
         lines.append("")
         header = f"{'Cuenta':<30}{'Debe':>12}{'Haber':>12}{'Debe':>12}{'Haber':>12}"
         lines.append(header)
@@ -447,32 +562,240 @@ class AperturaData:
 
         return "\n".join(lines)
 
+    # ===============================
+    # Balance General
+    # ===============================
+    def generar_balance_general(self) -> str:
+        """
+        Suma Ventas, Costo de lo Vendido y Gastos Generales
+        para calcular la Utilidad del periodo.
+        """
+        if not self.ledger_accounts:
+            return "No hay datos para generar Balance General."
+
+        total_ventas = 0.0
+        total_costo = 0.0
+        total_gastos = 0.0
+
+        for cuenta, movimientos in self.ledger_accounts.items():
+            # Suma de 'Ventas' (generalmente en el Haber)
+            if "Ventas" in cuenta:
+                total_ventas += sum(m["haber"] for m in movimientos)
+            # Suma de 'Costo de lo Vendido' (generalmente en el Debe)
+            if "Costo de lo Vendido" in cuenta:
+                total_costo += sum(m["haber"] for m in movimientos)
+            # Suma de 'Gastos Generales' (generalmente en el Debe)
+            if "Gastos Generales" in cuenta:
+                total_gastos += sum(m["debe"] for m in movimientos)
+
+        utilidad_bruta = total_ventas - total_costo
+        utilidad_neta = utilidad_bruta - total_gastos
+
+        texto = "Balance General\n"
+        texto += f"Ventas: ${total_ventas:,.2f}\n"
+        texto += f"Costo de lo Vendido: ${total_costo:,.2f}\n"
+        texto += f"Utilidad Bruta: ${utilidad_bruta:,.2f}\n"
+        texto += f"Gastos Generales: ${total_gastos:,.2f}\n"
+        texto += f"Utilidad del Periodo: ${utilidad_neta:,.2f}\n"
+        return texto
+
+    # ==========================================
+    # ESTADO DE CAMBIOS EN EL CAPITAL CONTABLE
+    # ==========================================
+    def generar_estado_flujos_efectivo(self) -> str:
+        # Calcular valores necesarios
+        utilidad_ejercicio = self.calcular_utilidad()
+        depreciacion_total = sum(sum(m['haber'] for m in movs) 
+                            for cuenta, movs in self.ledger_accounts.items() 
+                            if "Dep. Acum." in cuenta)
+        
+        # Calcular cambios en cuentas de operación
+        cambio_clientes = sum(m['debe'] - m['haber'] 
+                          for cuenta in self.ledger_accounts 
+                          if "Clientes" in cuenta 
+                          for m in self.ledger_accounts[cuenta])
+        
+        cambio_inventario = sum(m['debe'] - m['haber'] 
+                            for m in self.ledger_accounts.get("Inventario", []))
+        
+        cambio_iva_acreditable = sum(m['debe'] - m['haber'] 
+                                  for m in self.ledger_accounts.get("IVA Acreditable", []))
+        
+        cambio_iva_por_acreditar = sum(m['debe'] - m['haber'] 
+                                    for m in self.ledger_accounts.get("IVA por Acreditar", []))
+        
+        cambio_proveedores = sum(m['haber'] - m['debe'] 
+                           for m in self.ledger_accounts.get("Acreedores", []))
+        
+        # Calculos de impuestos
+        isr = utilidad_ejercicio * 0.30
+        ptu = utilidad_ejercicio * 0.10
+        utilidad_despues_impuestos = utilidad_ejercicio - isr - ptu
+        
+        # Efectivo inicial/final
+        caja_inicial = next((m['debe'] for m in self.ledger_accounts.get("Caja", []) 
+                           if m['trans_code'] == "A"), 0.0)
+        caja_final = self.caja
+        
+        texto = """
+ESTADOS DE FLUJOS DE EFECTIVO                                
+METODO INDIRECTO                                
+    Actividades en Operación                            
+                                
+Sumar   Clientes             ${:>15,.2f}                    
+Sumar   Almacén              ${:>15,.2f}                    
+Sumar   IVA Acreditado       ${:>15,.2f}                    
+Sumar   IVA por acreditar    ${:>15,.2f}    ${:>15,.2f}                
+Restar  IVA Trasladado       ${:>15,.2f}                    
+Restar  IVA por trasladar    ${:>15,.2f}                    
+Restar  Proveedores          ${:>15,.2f}            
+Restar  Provisiones de ISR   ${:>15,.2f}    30%    ${:>15,.2f}    ${:>15,.2f} 
+Restar  Provision de PTU     ${:>15,.2f}    10%    ${:>15,.2f}    
+Restar  Utilidad ejercicio   ${:>15,.2f}    ${:>15,.2f}                
+                                
+    Flujos netos del efectivo de actividades en operación    ${:>15,.2f}                
+                                
+                                
+    Actividades de Inversion                            
+                                
+    Departamento               ${:>15,.2f}                    
+    Equipo de computo y tecnologias ${:>15,.2f}                    
+    Software                   ${:>15,.2f}                    
+    Muebles y Enseres          ${:>15,.2f}                    
+    Equipo de iluminacion      ${:>15,.2f}                    
+                                
+    Flujos netos del efectivo de inversion    ${:>15,.2f}                
+                                
+    Capital social             ${:>15,.2f}                    
+    Acreedores diversos        ${:>15,.2f}                    
+                                
+    Flujos netos de efectivo de actividades de financiamiento    ${:>15,.2f}                
+                                
+    Incremento Neto de efectivo y equivalentes de efectivo                                
+                                
+    Efectivo al Final del periodo                                
+    Caja               ${:>15,.2f}                    
+    Efectivo al Principio del periodo                                
+    Caja               ${:>15,.2f}                    
+                                
+    Efectivo al Principio del periodo                                
+    Bancos                              
+    Efectivo al Final del periodo       ${:>15,.2f}    ${:>15,.2f}    ${:>15,.2f}            
+    Bancos                              
+    Efectivo al final del periodo               ${:>15,.2f}                
+                                
+                                
+METODO DIRECTO                                
+Utlidad del ejercicio               ${:>15,.2f}                
+Cargos a resultados que no implican utilizacion de efectivo                                
+ISR                 ${:>15,.2f}                    
+PTU                 ${:>15,.2f}                    
+Acreedores          ${:>15,.2f}    ${:>15,.2f}                
+Depreciaciones      ${:>15,.2f}                
+Efectivo generado en la operación       ${:>15,.2f}                
+Financiamiento y otras fuentes       ${:>15,.2f}                
+Proveedores                 ${:>15,.2f}                
+Suma de las fuentes de efectivo       ${:>15,.2f}                
+    APLICACIÓN DE EFECTIVO                            
+Almacén                 ${:>15,.2f}                
+Clientes                ${:>15,.2f}                
+IVA acreditable         ${:>15,.2f}                
+IVA por acreditar       ${:>15,.2f}                
+IVA trasladado          ${:>15,.2f}                
+IVA por trasladar       ${:>15,.2f}    ${:>15,.2f}            
+Activos no circulantes      ${:>15,.2f}                
+Disminucion neta del efectivo      ${:>15,.2f}                
+Saldo inicial de caja       ${:>15,.2f}                
+Saldo final de caja                            
+""".format(
+    # Método Indirecto
+    cambio_clientes,
+    cambio_inventario,
+    cambio_iva_acreditable,
+    cambio_iva_por_acreditar,
+    cambio_clientes + cambio_inventario + cambio_iva_acreditable + cambio_iva_por_acreditar,
+    sum(m['haber'] for m in self.ledger_accounts.get("IVA Trasladado", [])),
+    sum(m['haber'] for m in self.ledger_accounts.get("IVA por Trasladar", [])),
+    cambio_proveedores,
+    isr, isr, utilidad_despues_impuestos,
+    ptu, ptu,
+    utilidad_ejercicio,
+    utilidad_ejercicio + depreciacion_total + cambio_proveedores - isr - ptu,
+    # Actividades de Inversion
+    sum(v for n, v in self.activos_no_circulantes if "Departamento" in n),
+    sum(v for n, v in self.activos_no_circulantes if "Equipo de computo" in n),
+    sum(v for n, v in self.activos_no_circulantes if "Software" in n),
+    sum(v for n, v in self.activos_no_circulantes if "Muebles" in n),
+    sum(v for n, v in self.activos_no_circulantes if "iluminacion" in n),
+    sum(v for n, v in self.activos_no_circulantes),
+    # Financiamiento
+    -self.capital,
+    -self.acreedores,
+    -self.capital - self.acreedores,
+    # Efectivo
+    caja_final,
+    caja_inicial,
+    caja_inicial - caja_final, 0.0, caja_inicial - caja_final,
+    caja_final - caja_inicial,
+    # Método Directo
+    utilidad_ejercicio,
+    isr,
+    ptu,
+    cambio_proveedores, isr + ptu + cambio_proveedores,
+    depreciacion_total,
+    utilidad_ejercicio + isr + ptu + cambio_proveedores + depreciacion_total,
+    0.0,
+    0.0,
+    utilidad_ejercicio + isr + ptu + cambio_proveedores + depreciacion_total,
+    # Aplicación de Efectivo
+    self.inventario,
+    cambio_clientes,
+    self.iva_acreditable,
+    self.iva_por_acreditar,
+    sum(m['haber'] for m in self.ledger_accounts.get("IVA Trasladado", [])),
+    sum(m['haber'] for m in self.ledger_accounts.get("IVA por Trasladar", [])),
+    self.inventario + cambio_clientes + self.iva_acreditable + self.iva_por_acreditar,
+    sum(v for _, v in self.activos_no_circulantes),
+    caja_inicial - caja_final,
+    caja_inicial,
+)
+
+        return texto
+
 
 # ========================
 # INTERFAZ EN STREAMLIT
 # ========================
 def main():
     st.title("Aplicación Contable Básica")
-    st.subheader("Empresa: Mi Empresa")
+    st.subheader("Empresa: Gameverse")
     
     if "apertura_data" not in st.session_state:
         st.session_state["apertura_data"] = AperturaData()
     data = st.session_state["apertura_data"]
     
+    # Agregamos en el menú las operaciones de la 2a parte
     menu = st.sidebar.radio(
         "Seleccione una operación:",
         (
-            "Asiento de Apertura", 
-            "Compra en Efectivo", 
-            "Compra a Crédito", 
-            "Compra Combinada", 
+            "Asiento de Apertura",
+            "Compra en Efectivo",
+            "Compra a Crédito",
+            "Compra Combinada",
             "Pago de Rentas Pagadas por Anticipado",
-            "Compra de Papelería", 
+            "Compra de Papelería",
             "Anticipo de Clientes",
+            "Venta",
+            "Costo de lo Vendido",
+            "Gastos Generales",
+            "Anular Anticipo de Cliente",
+            "Registrar Depreciaciones",
             "Mostrar Balance",
             "Mostrar Libro Diario",
             "Mostrar Tablas de Mayor",
-            "Balance de Comprobacion"
+            "Balanza de Comprobacion",
+            "Mostrar Balance General",
+            "Mostrar Estado de flujos"
         )
     )
     
@@ -490,6 +813,16 @@ def main():
         mostrar_compra_papeleria(data)
     elif menu == "Anticipo de Clientes":
         mostrar_anticipo_clientes(data)
+    elif menu == "Venta":
+        mostrar_venta(data)
+    elif menu == "Costo de lo Vendido":
+        mostrar_costo_vendido(data)
+    elif menu == "Gastos Generales":
+        mostrar_gastos_generales(data)
+    elif menu == "Anular Anticipo de Cliente":
+        mostrar_anular_anticipo(data)
+    elif menu == "Registrar Depreciaciones":
+        mostrar_depreciaciones(data)
     elif menu == "Mostrar Balance":
         st.subheader("Balance General")
         st.code(data.generar_tabla_balance())
@@ -499,11 +832,104 @@ def main():
     elif menu == "Mostrar Tablas de Mayor":
         st.subheader("Tablas de Mayor")
         st.code(data.generar_tabla_mayor())
-    else:  # Balance de Comprobacion
+    elif menu == "Balanza de Comprobacion":
         st.subheader("Balance de Comprobación")
-        st.code(data.generar_balance_comprobacion())
+        st.code(data.generar_balanza_comprobacion())
+    elif menu == "Mostrar Balance General":
+        st.subheader("Balance General")
+        st.code(data.generar_balance_general())
+    else:  # "Mostrar Estado de flujos"
+        st.subheader("Estado de Flujos de Efectivo")
+        st.code(data.generar_estado_flujos_efectivo())
 
 
+# ============================
+# FUNCIONES DE INTERFAZ (2a parte)
+# ============================
+def mostrar_venta(data: AperturaData):
+    st.subheader("Registrar Venta")
+    descripcion = st.text_input("Descripción de la Venta")
+    monto = st.number_input("Monto de la Venta", min_value=0.0, step=1000.0)
+    if st.button("Registrar Venta"):
+        try:
+            data.registrar_venta(descripcion, monto)
+            st.success(f"Venta '{descripcion}' por ${monto:,.2f} registrada.")
+            st.code(data.generar_tabla_balance())
+        except ValueError as e:
+            st.warning(str(e))
+
+def mostrar_costo_vendido(data: AperturaData):
+    st.subheader("Registrar Costo de lo Vendido")
+    descripcion = st.text_input("Descripción del Costo")
+    costo = st.number_input("Costo de lo Vendido", min_value=0.0, step=1000.0)
+    if st.button("Registrar Costo"):
+        try:
+            data.registrar_costo_vendido(descripcion, costo)
+            st.success(f"Costo de lo Vendido '{descripcion}' por ${costo:,.2f} registrado.")
+            st.code(data.generar_tabla_balance())
+        except ValueError as e:
+            st.warning(str(e))
+
+def mostrar_gastos_generales(data: AperturaData):
+    st.subheader("Registrar Gastos Generales")
+    descripcion = st.text_input("Descripción del Gasto")
+    monto = st.number_input("Monto del Gasto", min_value=0.0, step=1000.0)
+    if st.button("Registrar Gasto General"):
+        try:
+            data.registrar_gastos_generales(descripcion, monto)
+            st.success(f"Gasto '{descripcion}' por ${monto:,.2f} registrado.")
+            st.code(data.generar_tabla_balance())
+        except ValueError as e:
+            st.warning(str(e))
+
+def mostrar_anular_anticipo(data: AperturaData):
+    st.subheader("Anular Anticipo de Cliente (Recibir la otra parte)")
+    descripcion = st.text_input("Descripción de la Operación")
+    monto = st.number_input("Monto de la Venta/Anticipo", min_value=0.0, step=1000.0)
+    if st.button("Anular Anticipo"):
+        try:
+            data.anular_anticipo_cliente(descripcion, monto)
+            st.success(f"Anticipo anulado por ${monto:,.2f}.")
+            st.code(data.generar_tabla_balance())
+        except ValueError as e:
+            st.warning(str(e))
+
+def mostrar_depreciaciones(data: AperturaData):
+    st.subheader("Registrar Depreciaciones")
+    st.write("Ingrese las depreciaciones de cada cuenta (Dejar en 0 si no aplica).")
+    dep_departamento = st.number_input("Dep. Acum. De Departamento", min_value=0.0, step=1000.0)
+    dep_tec = st.number_input("Dep. Acum. De Eq. Y Tecnologia", min_value=0.0, step=1000.0)
+    dep_software = st.number_input("Dep. Acum. De Software para desarrollo", min_value=0.0, step=100.0)
+    dep_muebles = st.number_input("Dep. Acum. De Muebles", min_value=0.0, step=1000.0)
+    dep_ilum = st.number_input("Dep. Acum. De Eq. De Iluminacion", min_value=0.0, step=1000.0)
+    descripcion = st.text_input("Descripción (Ejem: Depreciación Mensual)")
+
+    if st.button("Registrar Depreciación"):
+        try:
+            dict_deps = {}
+            if dep_departamento > 0:
+                dict_deps["Dep. Acum. De Departamento"] = dep_departamento
+            if dep_tec > 0:
+                dict_deps["Dep. Acum. De Eq. Y Tecnologia"] = dep_tec
+            if dep_software > 0:
+                dict_deps["Dep. Acum. De Software para desarrollo"] = dep_software
+            if dep_muebles > 0:
+                dict_deps["Dep. Acum. De Muebles"] = dep_muebles
+            if dep_ilum > 0:
+                dict_deps["Dep. Acum. De Eq. De Iluminacion"] = dep_ilum
+            
+            if dict_deps:
+                data.registrar_depreciacion(descripcion, dict_deps)
+                st.success("Depreciaciones registradas correctamente.")
+                st.code(data.generar_tabla_balance())
+            else:
+                st.info("No se ingresaron importes de depreciación.")
+        except ValueError as e:
+            st.warning(str(e))
+
+# ========================
+# FUNCIONES DE INTERFAZ (1a parte)
+# ========================
 def mostrar_asiento_apertura(data: AperturaData):
     st.subheader("Asiento de Apertura")
     if data.apertura_realizada:
@@ -563,7 +989,6 @@ def mostrar_compra_credito(data: AperturaData):
         except ValueError as e:
             st.warning(str(e))
 
-
 def mostrar_compra_combinada(data: AperturaData):
     st.subheader("Compra Combinada")
     nombre = st.text_input("Nombre de la Compra Combinada")
@@ -575,7 +1000,6 @@ def mostrar_compra_combinada(data: AperturaData):
             st.code(data.generar_tabla_balance())
         except ValueError as e:
             st.warning(str(e))
-
 
 def mostrar_anticipo_clientes(data: AperturaData):
     st.subheader("Anticipo de Clientes")
@@ -589,7 +1013,6 @@ def mostrar_anticipo_clientes(data: AperturaData):
         except ValueError as e:
             st.warning(str(e))
 
-
 def mostrar_compra_papeleria(data: AperturaData):
     st.subheader("Compra de Papelería")
     nombre = st.text_input("Nombre de la Compra de Papelería")
@@ -601,8 +1024,7 @@ def mostrar_compra_papeleria(data: AperturaData):
             st.code(data.generar_tabla_balance())
         except ValueError as e:
             st.warning(str(e))
-
-
+            
 def mostrar_pago_rentas(data: AperturaData):
     st.subheader("Pago de Rentas Pagadas por Anticipado")
     nombre = st.text_input("Descripción del Pago de Rentas")
